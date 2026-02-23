@@ -1,0 +1,24 @@
+ESP32 DEMO - HƯỚNG DẪN NỐI DÂY
+====================================
+
+1. Relay Module:
+----------------
+- VCC   → ESP32 5V   (Dây màu Đỏ)
+- GND   → ESP32 GND.1 (Dây màu Đen)
+- D1    → ESP32 GPIO 23 (Dây màu Xanh lá)
+
+2. RTC DS1307:
+--------------
+- 5V    → ESP32 5V   (Dây màu Đỏ)
+- GND   → ESP32 GND.2 (Dây màu Đen)
+- SCL   → ESP32 GPIO 22 (Dây màu Xanh lá)
+- SDA   → ESP32 GPIO 21 (Dây màu Xanh lá)
+
+3. Serial Monitor:
+------------------
+- TX ESP32 → RX Serial Monitor
+- RX ESP32 → TX Serial Monitor
+
+Lưu ý:
+- Đảm bảo các dây nối đúng chân và chắc chắn.
+- Kiểm tra lại module RTC nếu gặp lỗi thời gian hoặc lỗi I2C.

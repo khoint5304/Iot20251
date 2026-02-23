@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <title>Bình Nóng Lạnh Thông Minh</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+
+      background-image: url('background.png');
+      background-size: cover;                  
+      background-position: center;            
+      background-attachment: fixed;           
+      background-repeat: no-repeat;
+    }
+
+    .card {
+      background: white;
+      max-width: 400px;
+      margin: 40px auto;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+    }
+
+    .status {
+      font-size: 24px;
+      font-weight: bold;
+      margin: 15px 0;
+    }
+
+    .off {
+      color: red;
+    }
+
+    .on {
+      color: green;
+    }
+
+    button {
+      width: 100%;
+      padding: 12px;
+      margin: 5px 0;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .btn-off {
+      background: red;
+      color: white;
+    }
+
+    .btn-on {
+      background: green;
+      color: white;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="card">
+    <h2>Bình Nóng Lạnh</h2>
+
+    <div id="status" class="status off">ĐANG TẮT</div>
+
+    <hr>
+
+    <h3>Lịch hẹn</h3>
+    <p id="schedule">Chưa có lịch</p>
+
+    <hr>
+
+    <button class="btn-on" onclick="sendCmd('on')"
+      title='npx mqtt pub -h 192.168.137.1 -p 1883 -u admin -P Admin123 -t "nha_toi/binh_nong_lanh/lenh" -m "ON"'>BẬT
+      NGAY</button>
+    <button class="btn-off" onclick="sendCmd('off')"
+      title='npx mqtt pub -h 192.168.137.1 -p 1883 -u admin -P Admin123 -t "nha_toi/binh_nong_lanh/lenh" -m "OFF"'>TẮT
+      NGAY</button>
+
+    <hr>
+
+    <h3>Hẹn giờ</h3>
+    <input id="hour" type="number" min="0" max="23" placeholder="Giờ">
+    <input id="minute" type="number" min="0" max="59" placeholder="Phút">
+
+    <button onclick="setSchedule('on')"
+      title='Lệnh: npx mqtt pub -h 192.168.137.1 -p 1883 -u admin -P Admin123 -t "nha_toi/binh_nong_lanh/dat_lich_bat" -m "GIO:PHUT"'>Đặt
+      lịch BẬT</button>
+    <button onclick="setSchedule('off')"
+      title='Lệnh: npx mqtt pub -h 192.168.137.1 -p 1883 -u admin -P Admin123 -t "nha_toi/binh_nong_lanh/dat_lich_tat" -m "GIO:PHUT"'>Đặt
+      lịch TẮT</button>
+
+    <div style="margin-top: 10px; font-size: 12px; color: #666;">
+      💡 Di chuột vào nút để xem lệnh MQTT tương ứng
+    </div>
+
+  </div>
+
+  <script>
+    async function loadStatus() {
+      const res = await fetch('/api/status');
+      const data = await res.json();
+
+      const statusEl = document.getElementById('status');
+
+      const statusText = data.status || 'CHUA CO DU LIEU';
+
+      const isOn = statusText.includes('BAT');
+
+      if (isOn) {
+        statusEl.textContent = 'ĐANG BẬT';
+        statusEl.classList.remove('off');
+        statusEl.classList.add('on');
+      } else {
+        statusEl.textContent = 'ĐANG TẮT';
+        statusEl.classList.remove('on');
+        statusEl.classList.add('off');
+      }
+
+      document.getElementById('schedule').textContent =
+        `Bật: ${data.onTime || '---'} | Tắt: ${data.offTime || '---'}`;
+    }
+
+    async function sendCmd(cmd) {
+      await fetch('/api/' + cmd, { method: 'POST' });
+    }
+
+    async function setSchedule(type) {
+      const hour = document.getElementById('hour').value;
+      const minute = document.getElementById('minute').value;
+      await fetch(`/api/schedule/${type}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hour, minute })
+      });
+
+      // Log lệnh mqtt tương ứng
+      const topic = type === 'on' ? 'nha_toi/binh_nong_lanh/dat_lich_bat' : 'nha_toi/binh_nong_lanh/dat_lich_tat';
+      const cmd = `npx mqtt pub -h 192.168.137.1 -p 1883 -u admin -P Admin123 -t "${topic}" -m "${hour}:${minute}"`;
+      console.log('📡 Lệnh MQTT:', cmd);
+    }
+
+    setInterval(loadStatus, 2000);
+    loadStatus();
+  </script>
+
+</body>
+
+</html>

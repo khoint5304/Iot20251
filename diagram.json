@@ -1,0 +1,99 @@
+{
+  "version": 1,
+  "author": "Nguyen Thai Khoi",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-c-v4",
+      "id": "esp",
+      "top": -67.2,
+      "left": -119.96,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-relay-module",
+      "id": "relay1",
+      "top": 192.2,
+      "left": -96,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ds1307",
+      "id": "rtc1",
+      "top": 33,
+      "left": 124.9,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [
+      "esp:TX",
+      "$serialMonitor:RX",
+      "",
+      []
+    ],
+    [
+      "esp:RX",
+      "$serialMonitor:TX",
+      "",
+      []
+    ],
+    [
+      "relay1:VCC",
+      "esp:5V",
+      "red",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "esp:GND.1",
+      "relay1:GND",
+      "black",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "relay1:IN",
+      "esp:23",
+      "green",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "rtc1:5V",
+      "esp:5V",
+      "red",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "rtc1:GND",
+      "esp:GND.2",
+      "black",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "rtc1:SCL",
+      "esp:22",
+      "green",
+      [
+        "h0"
+      ]
+    ],
+    [
+      "rtc1:SDA",
+      "esp:21",
+      "green",
+      [
+        "h0"
+      ]
+    ]
+  ],
+  "dependencies": {}
+}

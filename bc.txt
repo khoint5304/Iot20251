@@ -1,0 +1,1221 @@
+================================================================================
+BÁO CÁO TỔNG HỢP DỰ ÁN ESP32_DEMO
+HỆ THỐNG ĐIỀU KHIỂN BÌNH NÓNG LẠNH THÔNG MINH QUA MQTT
+================================================================================
+
+Ngày lập báo cáo: 09/01/2026
+
+================================================================================
+I. TỔNG QUAN DỰ ÁN
+================================================================================
+
+1. MÔ TẢ CHUNG
+--------------
+ESP32_Demo là một dự án IoT hoàn chỉnh sử dụng vi điều khiển ESP32 để điều khiển 
+bình nóng lạnh thông minh thông qua giao thức MQTT. Hệ thống cho phép:
+- Bật/tắt thiết bị từ xa qua mạng
+- Đặt lịch bật/tắt tự động theo thời gian
+- Giám sát trạng thái thiết bị realtime
+- Hỗ trợ cả Local MQTT Server và Cloud Server (HiveMQ)
+
+2. KIẾN TRÚC HỆ THỐNG
+---------------------
+Dự án bao gồm 3 thành phần chính:
+
+┌─────────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│   ESP32 Hardware    │ ◄─────► │   MQTT Broker    │ ◄─────► │  Web Dashboard  │
+│  + Relay Module     │  MQTT   │  (Local/Cloud)   │  HTTP   │   (Frontend)    │
+│  + RTC DS1307       │         │                  │         │                 │
+└─────────────────────┘         └──────────────────┘         └─────────────────┘
+
+Luồng hoạt động:
+1. ESP32 kết nối WiFi và MQTT Broker
+2. ESP32 subscribe các topic điều khiển
+3. Web Dashboard gửi lệnh qua HTTP API
+4. Backend publish message lên MQTT
+5. ESP32 nhận lệnh và điều khiển relay
+6. ESP32 gửi trạng thái ngược lại
+
+================================================================================
+II. CẤU TRÚC THƯ MỤC VÀ CÁC FILE
+================================================================================
+
+ESP32_Demo/
+├── platformio.ini          # Cấu hình PlatformIO build system
+├── wokwi.toml             # Cấu hình Wokwi simulator
+├── diagram.json           # Sơ đồ mạch điện Wokwi
+├── esp32_wiring_note.txt  # Hướng dẫn đấu nối phần cứng
+├── TEST_GUIDE.md          # Hướng dẫn test hệ thống
+│
+├── src/                   # Code ESP32
+│   ├── main.cpp           # File placeholder cho PlatformIO
+│   └── sketch.ino         # Code chính (303 dòng)
+│
+├── iot-backend/           # Backend Node.js
+│   ├── index.js           # HTTP API server
+│   ├── fake-esp32.js      # ESP32 simulator cho test
+│   ├── package.json       # Dependencies
+│   └── public/
+│       ├── index.html     # Web interface
+│       └── style.css      # CSS styling
+│
+└── mqtt-server/           # Local MQTT Broker
+    ├── server.js          # MQTT server với Aedes
+    ├── package.json       # Dependencies
+    ├── .env              # Cấu hình server
+    └── README.md         # Tài liệu MQTT server
+
+================================================================================
+III. CHI TIẾT CÁC THÀNH PHẦN
+================================================================================
+
+A. PHẦN CỨNG (ESP32 HARDWARE)
+==============================
+
+1. Vi điều khiển: ESP32 DevKit V1
+   - Board: esp32doit-devkit-v1
+   - Framework: Arduino
+   - Serial Monitor Speed: 115200 baud
+   - Upload Port: COM8
+   - WiFi: 2.4GHz only (không hỗ trợ 5GHz)
+
+2. Module kết nối:
+   
+   a) Relay Module (1 kênh):
+      - VCC   → ESP32 5V
+      - GND   → ESP32 GND.1
+      - IN    → ESP32 GPIO 23
+      Chức năng: Điều khiển bật/tắt bình nóng lạnh
+
+   b) RTC DS1307 (Real-Time Clock):
+      - 5V    → ESP32 5V
+      - GND   → ESP32 GND.2
+      - SCL   → ESP32 GPIO 22 (I2C Clock)
+      - SDA   → ESP32 GPIO 21 (I2C Data)
+      Chức năng: Lưu trữ thời gian thực, hỗ trợ đặt lịch
+
+3. Thư viện phụ thuộc:
+   - RTClib@^2.1.1 (Adafruit): Giao tiếp RTC DS1307
+   - PubSubClient@^2.8: MQTT client cho ESP32
+
+4. Các chân GPIO sử dụng:
+   - GPIO 23: Điều khiển relay (OUTPUT)
+   - GPIO 22: I2C SCL (RTC)
+   - GPIO 21: I2C SDA (RTC)
+   - TX/RX: Serial Monitor
+
+B. FIRMWARE ESP32 (sketch.ino)
+===============================
+
+1. Cấu hình mạng:
+   - WiFi SSID: "KNT"
+   - WiFi Password: "123456789"
+   - Lưu ý: Chỉ hỗ trợ WiFi 2.4GHz
+
+2. Cấu hình MQTT:
+   
+   a) Local Server Mode (USE_LOCAL_SERVER = true):
+      - Server: 192.168.137.1 (Mobile Hotspot IP)
+      - Port: 1883 (TCP, không TLS)
+      - Username: admin
+      - Password: Admin123
+   
+   b) Cloud Server Mode (USE_LOCAL_SERVER = false):
+      - Server: beef441362934e51ba18727f8ae7f97b.s1.eu.hivemq.cloud
+      - Port: 8883 (TLS encrypted)
+      - Username: admin
+      - Password: Admin123
+
+3. Topics MQTT:
+   
+   Subscribe (nhận lệnh):
+   - nha_toi/binh_nong_lanh/lenh
+     Messages: "ON" hoặc "OFF"
+     
+   - nha_toi/binh_nong_lanh/dat_lich_bat
+     Format: "HH:MM" (VD: "14:30")
+     
+   - nha_toi/binh_nong_lanh/dat_lich_tat
+     Format: "HH:MM" (VD: "15:00")
+   
+   Publish (gửi trạng thái):
+   - nha_toi/binh_nong_lanh/trang_thai
+     Messages: "DA BAT", "DA TAT", "DA BAT THEO LICH", 
+               "DA TAT THEO LICH", "DA DAT LICH BAT: HH:MM"
+
+4. Chức năng chính:
+
+   a) callback(): Xử lý message MQTT nhận được
+      - Bật/tắt relay theo lệnh ON/OFF
+      - Lưu lịch bật/tắt từ message
+      - Publish trạng thái sau khi thực hiện
+
+   b) reconnect(): Tự động kết nối lại MQTT khi mất kết nối
+      - Tạo Client ID ngẫu nhiên
+      - Subscribe lại tất cả topics
+      - Retry sau 5 giây nếu thất bại
+
+   c) checkSchedule(): Kiểm tra và thực thi lịch hẹn
+      - So sánh thời gian hiện tại với lịch đặt
+      - Tự động bật/tắt relay khi đến giờ
+      - Chỉ trigger 1 lần cho mỗi phút
+      - Hỗ trợ cả RTC và NTP time
+
+   d) setup(): Khởi tạo hệ thống
+      - Khởi tạo Serial, GPIO, RTC
+      - Kết nối WiFi
+      - Đồng bộ thời gian từ NTP (pool.ntp.org, GMT+7)
+      - Cập nhật thời gian cho RTC nếu có
+      - Kết nối MQTT Server
+
+   e) loop(): Vòng lặp chính
+      - Duy trì kết nối MQTT
+      - Kiểm tra lịch hẹn liên tục
+      - In thời gian hiện tại mỗi 5 giây
+
+5. Xử lý thời gian:
+   - NTP Server: pool.ntp.org
+   - Timezone: GMT+7 (Việt Nam)
+   - Fallback: Nếu không có RTC, dùng NTP
+   - Update: RTC được cập nhật từ NTP khi ESP32 boot
+
+C. MQTT SERVER LOCAL (mqtt-server/)
+====================================
+
+1. Công nghệ:
+   - Runtime: Node.js
+   - MQTT Engine: Aedes v0.51.2
+   - WebSocket: websocket-stream v5.5.2
+   - Terminal UI: chalk v4.1.2
+   - Config: dotenv v16.3.1
+
+2. Cấu hình (.env):
+   - MQTT_PORT=1883 (TCP)
+   - MQTT_WS_PORT=8080 (WebSocket cho web clients)
+   - MQTT_USERNAME=admin
+   - MQTT_PASSWORD=Admin123
+   - ENABLE_LOGGING=true
+   - LOG_SUBSCRIPTIONS=true
+   - LOG_MESSAGES=true
+
+3. Tính năng:
+   - MQTT Protocol (QoS 0, 1, 2)
+   - WebSocket support
+   - Username/Password authentication
+   - Retained messages
+   - Will messages
+   - Realtime logging
+   - Client monitoring
+   - Connection statistics
+
+4. Events logging:
+   - Client connect/disconnect
+   - Topic subscriptions
+   - Topic unsubscriptions
+   - Message publish
+   - Errors
+   - Statistics mỗi 30 giây
+
+5. Chạy server:
+   cd mqtt-server
+   npm install
+   npm start
+
+   Hoặc development mode:
+   npm run dev
+
+6. Test với mosquitto:
+   # Publish
+   mosquitto_pub -h localhost -t "nha_toi/binh_nong_lanh/lenh" -m "ON" -u admin -P Admin123
+   
+   # Subscribe
+   mosquitto_sub -h localhost -t "nha_toi/binh_nong_lanh/#" -u admin -P Admin123
+
+D. BACKEND API (iot-backend/)
+==============================
+
+1. Công nghệ:
+   - Framework: Express.js v5.2.1
+   - MQTT Client: mqtt v5.14.1
+   - CORS: cors v2.8.5
+   - Type: CommonJS
+
+2. HTTP Endpoints:
+
+   POST /api/on
+   - Bật bình nóng lạnh
+   - Publish: "nha_toi/binh_nong_lanh/lenh" = "ON"
+   - Response: { success: true }
+
+   POST /api/off
+   - Tắt bình nóng lạnh
+   - Publish: "nha_toi/binh_nong_lanh/lenh" = "OFF"
+   - Response: { success: true }
+
+   POST /api/schedule/on
+   - Body: { hour: number, minute: number }
+   - Đặt lịch bật
+   - Publish: "nha_toi/binh_nong_lanh/dat_lich_bat" = "HH:MM"
+
+   POST /api/schedule/off
+   - Body: { hour: number, minute: number }
+   - Đặt lịch tắt
+   - Publish: "nha_toi/binh_nong_lanh/dat_lich_tat" = "HH:MM"
+
+   GET /api/status
+   - Lấy trạng thái hiện tại
+   - Response: {
+       status: string,
+       onTime: string | null,
+       offTime: string | null
+     }
+
+3. MQTT Integration:
+   - Broker: mqtt://localhost:1883
+   - Subscribe: "nha_toi/binh_nong_lanh/trang_thai"
+   - Lưu trạng thái cuối cùng trong biến lastStatus
+   - Auto-reconnect khi mất kết nối
+
+4. Static Files:
+   - Serve files từ public/
+   - index.html: Web interface
+   - style.css: Styling
+
+5. Chạy backend:
+   cd iot-backend
+   npm install
+   node index.js
+
+   Server chạy tại:
+   - localhost:3000
+   - Hiển thị IP để truy cập từ thiết bị khác trong mạng
+
+E. WEB DASHBOARD (public/)
+===========================
+
+1. index.html - Giao diện điều khiển:
+   
+   Các thành phần UI:
+   - Hiển thị trạng thái (ĐANG BẬT / ĐANG TẮT)
+   - Nút BẬT NGAY (màu xanh)
+   - Nút TẮT NGAY (màu đỏ)
+   - Input giờ/phút cho đặt lịch
+   - Nút Đặt lịch BẬT
+   - Nút Đặt lịch TẮT
+   - Hiển thị lịch hiện tại
+   - Tooltip hiển thị lệnh MQTT tương ứng
+
+2. JavaScript Functions:
+   
+   loadStatus():
+   - Gọi GET /api/status mỗi 2 giây
+   - Cập nhật UI dựa trên response
+   - Auto-refresh status
+   
+   sendCmd(cmd):
+   - Gọi POST /api/{cmd}
+   - cmd = 'on' hoặc 'off'
+   
+   setSchedule(type):
+   - Lấy giá trị hour/minute từ input
+   - Gọi POST /api/schedule/{type}
+   - Log lệnh MQTT tương ứng vào console
+
+3. style.css - Thiết kế:
+   - Gradient background (74ebd5 → acb6e5)
+   - Card trắng với shadow
+   - Button hover effects
+   - Responsive design (max-width: 420px)
+   - Color coding: green=ON, red=OFF
+
+4. Tính năng UX:
+   - Realtime status update (2s interval)
+   - Hover tooltip hiển thị lệnh MQTT
+   - Visual feedback (màu sắc, animation)
+   - Mobile-friendly design
+
+F. FAKE ESP32 SIMULATOR (fake-esp32.js)
+========================================
+
+Mục đích: Test backend mà không cần ESP32 thật
+
+Chức năng:
+- Kết nối MQTT localhost:1883
+- Subscribe "nha_toi/binh_nong_lanh/#"
+- Nhận lệnh ON/OFF
+- Publish trạng thái: "DA BAT (GIẢ LAP)" / "DA TAT (GIẢ LAP)"
+
+Chạy:
+  node fake-esp32.js
+
+================================================================================
+IV. LUỒNG HOẠT ĐỘNG HỆ THỐNG
+================================================================================
+
+A. LUỒNG HOẠT ĐỘNG MQTT SERVER (server.js)
+===========================================
+
+1. KHỞI ĐỘNG SERVER
+-------------------
+   
+   Bước 1: Load Configuration
+   ├─ Đọc file .env (dotenv.config())
+   ├─ Load config:
+   │  ├─ mqttPort = 1883
+   │  ├─ wsPort = 8080
+   │  ├─ username = "admin"
+   │  ├─ password = "Admin123"
+   │  ├─ enableLogging = true
+   │  └─ logMessages = true
+   └─ Khởi tạo Map() để lưu clients
+
+   Bước 2: Setup Authentication Handler
+   ├─ aedes.authenticate = (client, username, password, callback)
+   ├─ Kiểm tra username === config.username
+   ├─ Kiểm tra password.toString() === config.password
+   ├─ Nếu đúng:
+   │  ├─ Log: ✓ Client [clientId] authenticated
+   │  └─ callback(null, true)
+   └─ Nếu sai:
+      ├─ Log: ✗ Client [clientId] authentication failed
+      ├─ Tạo error với returnCode = 4 (Bad username or password)
+      └─ callback(error, false)
+
+   Bước 3: Setup Event Handlers
+   
+   a) aedes.on('client', handler):
+      ├─ Khi client kết nối thành công
+      ├─ Lấy timestamp hiện tại (vi-VN locale)
+      ├─ Lưu vào Map: clients.set(client.id, { connectedAt: timestamp })
+      ├─ Log: Client connected: [clientId]
+      └─ Log: Total clients: [số lượng]
+   
+   b) aedes.on('clientDisconnect', handler):
+      ├─ Khi client ngắt kết nối
+      ├─ Xóa khỏi Map: clients.delete(client.id)
+      ├─ Log: Client disconnected: [clientId]
+      └─ Log: Total clients: [số lượng còn lại]
+   
+   c) aedes.on('subscribe', handler):
+      ├─ Khi client subscribe topic
+      ├─ Kiểm tra config.logSubscriptions
+      ├─ Nếu true:
+      │  ├─ Log: Client [clientId] subscribed:
+      │  └─ Với mỗi subscription:
+      │     └─ Log: - [topic] (QoS: [0/1/2])
+   
+   d) aedes.on('unsubscribe', handler):
+      ├─ Khi client unsubscribe topic
+      ├─ Kiểm tra config.logSubscriptions
+      ├─ Nếu true:
+      │  ├─ Log: Client [clientId] unsubscribed:
+      │  └─ Với mỗi topic:
+      │     └─ Log: - [topic]
+   
+   e) aedes.on('publish', handler):
+      ├─ Khi có message được publish
+      ├─ Kiểm tra config.logMessages && client exists
+      ├─ Nếu true:
+      │  ├─ Parse: message = packet.payload.toString()
+      │  ├─ Log: Message published:
+      │  ├─ Log: Client: [clientId]
+      │  ├─ Log: Topic: [packet.topic]
+      │  ├─ Log: Message: [message]
+      │  └─ Log: QoS: [0/1/2], Retain: [true/false]
+   
+   f) aedes.on('clientError', handler):
+      └─ Log: Client error [clientId]: [err.message]
+   
+   g) aedes.on('connectionError', handler):
+      └─ Log: Connection error: [err.message]
+
+   Bước 4: Start TCP Server (MQTT Protocol)
+   ├─ mqttServer = net.createServer(aedes.handle)
+   ├─ mqttServer.listen(1883, callback)
+   ├─ Log startup banner:
+   │  ├─ MQTT Server Started!
+   │  ├─ MQTT Port: 1883
+   │  ├─ WebSocket Port: 8080
+   │  ├─ Authentication: Enabled
+   │  └─ Username/Password info
+   ├─ Hiển thị local IP addresses:
+   │  ├─ Quét os.networkInterfaces()
+   │  ├─ Lọc IPv4 không phải internal
+   │  └─ Log tất cả IPs có thể kết nối
+   └─ Log: Waiting for clients...
+
+   Bước 5: Start WebSocket Server
+   ├─ httpServer = http.createServer()
+   ├─ ws.createServer({ server: httpServer }, aedes.handle)
+   ├─ httpServer.listen(8080)
+   └─ Log: WebSocket server ready on port 8080
+
+   Bước 6: Setup Monitoring
+   ├─ setInterval(30000ms):
+   │  ├─ Kiểm tra clients.size > 0
+   │  ├─ Log: Active clients: [số lượng]
+   │  └─ Với mỗi client:
+   │     └─ Log: - [clientId] (connected: [timestamp])
+   └─ Lặp lại mỗi 30 giây
+
+   Bước 7: Setup Graceful Shutdown
+   ├─ process.on('SIGINT', handler):
+   │  ├─ Log: Shutting down server...
+   │  ├─ aedes.close(callback)
+   │  ├─ Log: Server closed
+   │  └─ process.exit(0)
+
+2. XỬ LÝ KẾT NỐI TỪ ESP32
+--------------------------
+
+   Bước 1: ESP32 gửi CONNECT packet
+   ├─ Chứa: clientId = "ESP32Client-XXXX"
+   ├─ Chứa: username = "admin"
+   └─ Chứa: password = "Admin123"
+
+   Bước 2: Server nhận CONNECT
+   ├─ Trigger: aedes.authenticate()
+   ├─ Kiểm tra credentials
+   └─ Nếu thành công:
+      ├─ Log: Client [ESP32Client-XXXX] authenticated
+      ├─ Trigger: aedes.on('client')
+      ├─ Lưu client info vào Map
+      ├─ Log: Client connected: ESP32Client-XXXX
+      ├─ Log: Total clients: 1
+      └─ Gửi CONNACK (code=0) về ESP32
+
+   Bước 3: ESP32 gửi SUBSCRIBE packets
+   ├─ Topic 1: "nha_toi/binh_nong_lanh/lenh"
+   ├─ Topic 2: "nha_toi/binh_nong_lanh/dat_lich_bat"
+   └─ Topic 3: "nha_toi/binh_nong_lanh/dat_lich_tat"
+
+   Bước 4: Server xử lý SUBSCRIBE
+   ├─ Trigger: aedes.on('subscribe')
+   ├─ Log: Client [ESP32Client-XXXX] subscribed:
+   ├─ Log: - nha_toi/binh_nong_lanh/lenh (QoS: 0)
+   ├─ Log: - nha_toi/binh_nong_lanh/dat_lich_bat (QoS: 0)
+   ├─ Log: - nha_toi/binh_nong_lanh/dat_lich_tat (QoS: 0)
+   ├─ Lưu subscriptions vào Aedes internal state
+   └─ Gửi SUBACK về ESP32
+
+3. XỬ LÝ MESSAGE PUBLISH
+-------------------------
+
+   Kịch bản A: Backend publish → ESP32
+   
+   Bước 1: Backend gửi message
+   ├─ Topic: "nha_toi/binh_nong_lanh/lenh"
+   ├─ Payload: "ON"
+   └─ QoS: 0
+
+   Bước 2: Server nhận PUBLISH packet
+   ├─ Trigger: aedes.on('publish')
+   ├─ packet.topic = "nha_toi/binh_nong_lanh/lenh"
+   ├─ packet.payload = Buffer("ON")
+   ├─ packet.qos = 0
+   ├─ Convert: message = packet.payload.toString() = "ON"
+   ├─ Log: Message published:
+   ├─ Log: Client: [backend-client-id]
+   ├─ Log: Topic: nha_toi/binh_nong_lanh/lenh
+   ├─ Log: Message: ON
+   └─ Log: QoS: 0, Retain: false
+
+   Bước 3: Server routing message
+   ├─ Aedes kiểm tra subscriptions
+   ├─ Tìm thấy: ESP32Client-XXXX subscribe topic này
+   ├─ Forward PUBLISH packet đến ESP32
+   └─ ESP32 nhận được message "ON"
+
+   Kịch bản B: ESP32 publish → Backend
+   
+   Bước 1: ESP32 gửi trạng thái
+   ├─ Topic: "nha_toi/binh_nong_lanh/trang_thai"
+   ├─ Payload: "DA BAT"
+   └─ QoS: 0
+
+   Bước 2: Server nhận và log
+   ├─ Trigger: aedes.on('publish')
+   ├─ Log: Message published:
+   ├─ Log: Client: ESP32Client-XXXX
+   ├─ Log: Topic: nha_toi/binh_nong_lanh/trang_thai
+   ├─ Log: Message: DA BAT
+   └─ Log: QoS: 0, Retain: false
+
+   Bước 3: Server routing
+   ├─ Kiểm tra subscribers của topic này
+   ├─ Tìm thấy: backend-client subscribe "nha_toi/binh_nong_lanh/trang_thai"
+   ├─ Forward message đến Backend
+   └─ Backend nhận được "DA BAT"
+
+4. XỬ LÝ NGẮT KẾT NỐI
+----------------------
+
+   Bước 1: ESP32 mất WiFi hoặc gửi DISCONNECT
+   └─ TCP connection closed
+
+   Bước 2: Server phát hiện disconnect
+   ├─ Trigger: aedes.on('clientDisconnect')
+   ├─ clients.delete("ESP32Client-XXXX")
+   ├─ Log: Client disconnected: ESP32Client-XXXX
+   ├─ Log: Total clients: 0
+   └─ Cleanup subscriptions và resources
+
+   Bước 3: ESP32 reconnect
+   ├─ ESP32 gửi CONNECT packet mới
+   ├─ Server authenticate lại
+   ├─ ESP32 subscribe lại tất cả topics
+   └─ Hoạt động trở lại bình thường
+
+B. LUỒNG HOẠT ĐỘNG SKETCH.INO (ESP32 Firmware)
+===============================================
+
+1. KHỞI ĐỘNG HỆ THỐNG - setup()
+--------------------------------
+
+   Bước 1: Khởi tạo Serial và GPIO
+   ├─ Serial.begin(115200)
+   ├─ pinMode(relayPin=23, OUTPUT)
+   ├─ digitalWrite(relayPin, LOW) // Tắt relay ban đầu
+   └─ Log: "Dang khoi dong..."
+
+   Bước 2: Khởi tạo RTC (DS1307)
+   ├─ Wire.begin() // I2C init
+   ├─ rtc.begin()
+   ├─ Nếu thành công:
+   │  ├─ rtcAvailable = true
+   │  └─ Log: "RTC da san sang!"
+   └─ Nếu thất bại:
+      ├─ rtcAvailable = false
+      └─ Log: "CANH BAO: Khong tim thay RTC! Se dung thoi gian tu NTP..."
+
+   Bước 3: Kết nối WiFi
+   ├─ WiFi.begin(ssid="KNT", password="123456789")
+   ├─ Loop while (WiFi.status() != WL_CONNECTED):
+   │  ├─ delay(500)
+   │  └─ Serial.print(".")
+   ├─ Log: "WiFi da ket noi!"
+   └─ Log: "IP address: [ESP32 IP]"
+
+   Bước 4: Đồng bộ thời gian NTP
+   ├─ configTime(gmtOffset_sec=25200, daylightOffset_sec=0, ntpServer="pool.ntp.org")
+   ├─ Loop retry (max 10 lần):
+   │  ├─ getLocalTime(&timeinfo)
+   │  ├─ Nếu thất bại:
+   │  │  ├─ Log: "Dang cho thoi gian tu NTP..."
+   │  │  ├─ delay(1000)
+   │  │  └─ retry++
+   │  └─ Nếu thành công:
+   │     └─ Break loop
+   ├─ Nếu lấy được thời gian:
+   │  ├─ Log: "Da dong bo thoi gian thanh cong!"
+   │  ├─ Log: "Thoi gian hien tai: DD/MM/YYYY HH:MM:SS"
+   │  ├─ Nếu rtcAvailable == true:
+   │  │  ├─ rtc.adjust(DateTime(...từ NTP...))
+   │  │  └─ Log: "Da cap nhat thoi gian cho RTC!"
+   └─ Nếu thất bại:
+      └─ Log: "CANH BAO: Khong the lay thoi gian tu NTP!"
+
+   Bước 5: Setup MQTT Client
+   ├─ Nếu USE_LOCAL_SERVER == false (Cloud):
+   │  ├─ WiFiClientSecure *secureClient = new WiFiClientSecure()
+   │  ├─ secureClient->setInsecure() // Bỏ qua verify cert
+   │  └─ client.setClient(*secureClient)
+   ├─ Nếu USE_LOCAL_SERVER == true (Local):
+   │  └─ Dùng WiFiClient thường (espClient)
+   ├─ client.setServer(mqtt_server="192.168.137.1", mqtt_port=1883)
+   ├─ client.setCallback(callback) // Set message handler
+   ├─ Log: "HE THONG DA SAN SANG!"
+   ├─ Log: "Ket noi toi MQTT Server: 192.168.137.1"
+   └─ Log: "Port: 1883"
+
+2. VÒNG LẶP CHÍNH - loop()
+---------------------------
+
+   ┌─────────────────────────────────────────────────┐
+   │  while(true) {                                  │
+   │    1. Kiểm tra kết nối MQTT                    │
+   │    2. Xử lý MQTT messages                      │
+   │    3. Kiểm tra lịch hẹn                        │
+   │    4. In thời gian (mỗi 5s)                    │
+   │  }                                              │
+   └─────────────────────────────────────────────────┘
+
+   Chi tiết từng bước:
+
+   Bước 1: Kiểm tra kết nối MQTT
+   ├─ if (!client.connected())
+   │  └─ Gọi reconnect()
+   └─ else: Tiếp tục
+
+   Bước 2: Xử lý MQTT messages
+   ├─ client.loop()
+   ├─ Hàm này:
+   │  ├─ Đọc packets từ socket
+   │  ├─ Parse MQTT messages
+   │  ├─ Gọi callback() nếu nhận được PUBLISH
+   │  ├─ Gửi PINGREQ/PINGRESP để keep-alive
+   │  └─ Xử lý PUBACK, SUBACK, etc.
+   └─ Non-blocking, return ngay
+
+   Bước 3: Kiểm tra lịch hẹn
+   ├─ Gọi checkSchedule()
+   └─ (Chi tiết ở phần 5)
+
+   Bước 4: Debug logging (mỗi 5 giây)
+   ├─ static unsigned long lastPrint = 0
+   ├─ if (millis() - lastPrint > 5000):
+   │  ├─ Nếu rtcAvailable:
+   │  │  ├─ DateTime now = rtc.now()
+   │  │  └─ Log: "Thoi gian hien tai (RTC): HH:MM:SS"
+   │  ├─ Else:
+   │  │  ├─ getLocalTime(&timeinfo)
+   │  │  └─ Log: "Thoi gian hien tai (NTP): HH:MM:SS"
+   │  └─ lastPrint = millis()
+   └─ Continue loop
+
+3. KẾT NỐI MQTT - reconnect()
+------------------------------
+
+   ┌─────────────────────────────────────────────────┐
+   │  while (!client.connected()) {                  │
+   │    1. Tạo clientId ngẫu nhiên                  │
+   │    2. Thử kết nối với credentials              │
+   │    3. Nếu thành công: Subscribe topics         │
+   │    4. Nếu thất bại: Chờ 5s và retry            │
+   │  }                                              │
+   └─────────────────────────────────────────────────┘
+
+   Chi tiết:
+
+   Bước 1: Tạo Client ID
+   ├─ String clientId = "ESP32Client-"
+   ├─ clientId += String(random(0xffff), HEX)
+   └─ VD: "ESP32Client-A3F2"
+
+   Bước 2: Thử kết nối
+   ├─ client.connect(clientId.c_str(), mqtt_user="admin", mqtt_pass="Admin123")
+   ├─ Hàm này:
+   │  ├─ Mở TCP socket đến mqtt_server:mqtt_port
+   │  ├─ Gửi CONNECT packet với credentials
+   │  ├─ Đợi nhận CONNACK
+   │  └─ Return true/false
+   
+   Bước 3: Nếu thành công (return true)
+   ├─ client.subscribe("nha_toi/binh_nong_lanh/lenh")
+   ├─ client.subscribe("nha_toi/binh_nong_lanh/dat_lich_bat")
+   ├─ client.subscribe("nha_toi/binh_nong_lanh/dat_lich_tat")
+   └─ Break while loop
+
+   Bước 4: Nếu thất bại (return false)
+   ├─ delay(5000) // Chờ 5 giây
+   └─ Continue while loop (retry)
+
+4. XỬ LÝ MESSAGE - callback()
+------------------------------
+
+   Function signature:
+   void callback(char *topic, byte *payload, unsigned int length)
+
+   Bước 1: Parse payload thành String
+   ├─ String message = ""
+   ├─ for (int i = 0; i < length; i++):
+   │  └─ message += (char)payload[i]
+   └─ VD: message = "ON"
+
+   Case A: Topic = "nha_toi/binh_nong_lanh/lenh"
+   ├─ if (message == "ON"):
+   │  ├─ digitalWrite(relayPin=23, HIGH) // Bật relay
+   │  └─ client.publish("nha_toi/binh_nong_lanh/trang_thai", "DA BAT")
+   │     ├─ Tạo PUBLISH packet
+   │     ├─ Gửi đến MQTT server
+   │     └─ Server forward đến Backend
+   ├─ else if (message == "OFF"):
+   │  ├─ digitalWrite(relayPin=23, LOW) // Tắt relay
+   │  └─ client.publish("nha_toi/binh_nong_lanh/trang_thai", "DA TAT")
+   └─ Return
+
+   Case B: Topic = "nha_toi/binh_nong_lanh/dat_lich_bat"
+   ├─ VD: message = "14:30"
+   ├─ int separatorIndex = message.indexOf(':')
+   ├─ if (separatorIndex != -1):
+   │  ├─ onHour = message.substring(0, separatorIndex).toInt() // = 14
+   │  ├─ onMinute = message.substring(separatorIndex + 1).toInt() // = 30
+   │  ├─ onTriggered = false // Reset trigger flag
+   │  ├─ String msg = "DA DAT LICH BAT: 14:30"
+   │  └─ client.publish("nha_toi/binh_nong_lanh/trang_thai", msg.c_str())
+   └─ Return
+
+   Case C: Topic = "nha_toi/binh_nong_lanh/dat_lich_tat"
+   ├─ Tương tự Case B
+   ├─ Parse message thành offHour và offMinute
+   ├─ offTriggered = false
+   └─ Publish: "DA DAT LICH TAT: HH:MM"
+
+5. KIỂM TRA LỊCH HẸN - checkSchedule()
+---------------------------------------
+
+   Bước 1: Lấy thời gian hiện tại
+   ├─ int currentHour, currentMinute
+   ├─ if (rtcAvailable):
+   │  ├─ DateTime now = rtc.now()
+   │  ├─ currentHour = now.hour()
+   │  └─ currentMinute = now.minute()
+   ├─ else:
+   │  ├─ struct tm timeinfo
+   │  ├─ if (!getLocalTime(&timeinfo)):
+   │  │  └─ return // Không có thời gian, bỏ qua check
+   │  ├─ currentHour = timeinfo.tm_hour
+   │  └─ currentMinute = timeinfo.tm_min
+
+   Bước 2: Kiểm tra lịch BẬT
+   ├─ if (onHour != -1): // Có lịch bật
+   │  ├─ if (currentHour == onHour && currentMinute == onMinute):
+   │  │  ├─ if (!onTriggered): // Chưa trigger
+   │  │  │  ├─ digitalWrite(relayPin, HIGH) // BẬT
+   │  │  │  ├─ client.publish("...", "DA BAT THEO LICH")
+   │  │  │  └─ onTriggered = true // Đánh dấu đã trigger
+   │  │  └─ else: // Đã trigger rồi, không làm gì
+   │  └─ else: // Không phải giờ này
+   │     └─ onTriggered = false // Reset flag cho phút tiếp theo
+
+   Bước 3: Kiểm tra lịch TẮT
+   ├─ if (offHour != -1): // Có lịch tắt
+   │  ├─ if (currentHour == offHour && currentMinute == offMinute):
+   │  │  ├─ if (!offTriggered):
+   │  │  │  ├─ digitalWrite(relayPin, LOW) // TẮT
+   │  │  │  ├─ client.publish("...", "DA TAT THEO LICH")
+   │  │  │  └─ offTriggered = true
+   │  │  └─ else: // Đã trigger
+   │  └─ else:
+   │     └─ offTriggered = false // Reset flag
+
+   Lưu ý về trigger flag:
+   ├─ onTriggered/offTriggered ngăn việc trigger nhiều lần trong cùng 1 phút
+   ├─ VD: 14:30:00, 14:30:15, 14:30:30, 14:30:45 - chỉ trigger 1 lần
+   └─ Reset về false khi không còn match để sẵn sàng cho lần sau
+
+C. TƯƠNG TÁC GIỮA MQTT SERVER VÀ ESP32
+=======================================
+
+Sequence Diagram đầy đủ:
+
+ESP32                    MQTT Server                Backend/Web
+  |                           |                          |
+  |--- CONNECT --------------->|                          |
+  |    (clientId, user, pass)  |                          |
+  |                           |                          |
+  |<-- CONNACK (code=0) ------|                          |
+  |                           |                          |
+  |--- SUBSCRIBE ------------->|                          |
+  |    (3 topics)             |                          |
+  |                           |                          |
+  |<-- SUBACK ----------------|                          |
+  |                           |                          |
+  |                           |<--- PUBLISH -------------|
+  |                           |     (lenh, "ON")         |
+  |                           |                          |
+  |<-- PUBLISH ----------------|                          |
+  |    (lenh, "ON")           |                          |
+  |                           |                          |
+  [Xử lý: Bật relay]          |                          |
+  |                           |                          |
+  |--- PUBLISH --------------->|                          |
+  |    (trang_thai, "DA BAT") |                          |
+  |                           |                          |
+  |                           |--- PUBLISH ------------->|
+  |                           |    (trang_thai, "DA BAT")|
+  |                           |                          |
+  |                           |                     [Update UI]
+  |                           |                          |
+  [Loop mỗi phút]             |                          |
+  [checkSchedule()]           |                          |
+  |                           |                          |
+  [Nếu đến giờ hẹn]           |                          |
+  |                           |                          |
+  |--- PUBLISH --------------->|                          |
+  |    (trang_thai, "...")    |                          |
+  |                           |                          |
+  |--- PINGREQ --------------->|                          |
+  |    (keep-alive)           |                          |
+  |                           |                          |
+  |<-- PINGRESP ---------------|                          |
+  |                           |                          |
+
+Timeline thực tế (1 phút hoạt động):
+
+00:00 - ESP32 boot, connect WiFi, sync NTP
+00:05 - Connect MQTT server
+00:05 - Subscribe 3 topics
+00:05 - Backend publish "ON"
+00:05 - ESP32 nhận, bật relay, publish trạng thái
+00:10 - Backend publish đặt lịch "14:30"
+00:10 - ESP32 lưu onHour=14, onMinute=30
+00:15 - checkSchedule() - chưa đến giờ
+00:20 - checkSchedule() - chưa đến giờ
+00:25 - MQTT PINGREQ/PINGRESP (keep-alive)
+00:30 - checkSchedule() - chưa đến giờ
+00:35 - Log thời gian hiện tại (mỗi 5s)
+00:40 - checkSchedule() - chưa đến giờ
+00:45 - MQTT PINGREQ/PINGRESP
+00:50 - checkSchedule() - chưa đến giờ
+00:55 - checkSchedule() - chưa đến giờ
+01:00 - Log thời gian hiện tại
+... (loop tiếp tục)
+
+KỊCH BẢN 1: BẬT/TẮT THỦ CÔNG
+------------------------------
+
+1. User mở Web Dashboard (http://localhost:3000)
+2. Click nút "BẬT NGAY"
+3. Frontend gọi POST /api/on
+4. Backend publish: topic="nha_toi/binh_nong_lanh/lenh", msg="ON"
+5. ESP32 nhận message qua callback()
+6. ESP32 set GPIO 23 = HIGH (relay bật)
+7. ESP32 publish: topic="nha_toi/binh_nong_lanh/trang_thai", msg="DA BAT"
+8. Backend subscribe nhận "DA BAT", update lastStatus
+9. Frontend polling GET /api/status mỗi 2s
+10. UI cập nhật: "ĐANG BẬT" (màu xanh)
+
+KỊCH BẢN 2: ĐẶT LỊCH
+---------------------
+
+1. User nhập: Giờ=14, Phút=30
+2. Click "Đặt lịch BẬT"
+3. Frontend gọi POST /api/schedule/on với body {hour: 14, minute: 30}
+4. Backend publish: topic="nha_toi/binh_nong_lanh/dat_lich_bat", msg="14:30"
+5. ESP32 nhận message, parse thành onHour=14, onMinute=30
+6. ESP32 publish: "DA DAT LICH BAT: 14:30"
+7. Backend update schedule.on = "14:30"
+8. Frontend hiển thị: "Bật: 14:30 | Tắt: ---"
+
+9. Khi đến 14:30:
+   - loop() gọi checkSchedule()
+   - Thời gian hiện tại (từ RTC hoặc NTP) = 14:30
+   - checkSchedule() phát hiện match
+   - Set GPIO 23 = HIGH
+   - Publish: "DA BAT THEO LICH"
+   - Set onTriggered = true (tránh trigger lặp lại)
+
+KỊCH BẢN 3: MẤT KẾT NỐI
+-------------------------
+
+1. WiFi bị mất
+2. ESP32 phát hiện !client.connected() trong loop()
+3. Gọi reconnect()
+4. Retry kết nối mỗi 5 giây
+5. Khi WiFi trở lại:
+   - Kết nối MQTT thành công
+   - Subscribe lại tất cả topics
+   - Tiếp tục hoạt động bình thường
+
+================================================================================
+V. HƯỚNG DẪN CÀI ĐẶT VÀ SỬ DỤNG
+================================================================================
+
+A. CÀI ĐẶT PHẦN CỨNG
+---------------------
+
+1. Đấu nối theo sơ đồ trong esp32_wiring_note.txt
+2. Kiểm tra lại các kết nối:
+   - Relay: VCC(5V), GND, IN(GPIO23)
+   - RTC: 5V, GND, SCL(GPIO22), SDA(GPIO21)
+3. Kết nối USB ESP32 vào máy tính (COM8)
+
+B. CÀI ĐẶT PHẦN MỀM
+--------------------
+
+1. PlatformIO:
+   - Cài VS Code + PlatformIO extension
+   - Mở folder ESP32_Demo
+   - PlatformIO tự động detect platformio.ini
+
+2. MQTT Server:
+   cd mqtt-server
+   npm install
+   npm start
+
+3. Backend:
+   cd iot-backend
+   npm install
+   node index.js
+
+4. Upload code lên ESP32:
+   # Trong VS Code với PlatformIO
+   - Click PlatformIO icon → Upload
+   
+   # Hoặc terminal
+   cd ESP32_Demo
+   pio run --target upload
+
+C. CHẠY HỆ THỐNG
+----------------
+
+Bước 1: Khởi động MQTT Server
+   cd mqtt-server
+   npm start
+   
+   Ghi nhớ IP hiển thị (VD: 192.168.137.1)
+
+Bước 2: Cập nhật IP trong sketch.ino (nếu cần)
+   - Mở src/sketch.ino
+   - Dòng 18: const char *local_mqtt_server = "192.168.137.1";
+   - Save và upload lại
+
+Bước 3: Khởi động Backend
+   cd iot-backend
+   node index.js
+   
+   Truy cập: http://localhost:3000
+
+Bước 4: Mở Serial Monitor
+   - PlatformIO → Serial Monitor
+   - Baud rate: 115200
+   - Kiểm tra log kết nối WiFi và MQTT
+
+Bước 5: Test trên Web Dashboard
+   - Mở http://localhost:3000
+   - Thử bật/tắt và đặt lịch
+
+D. TEST VÀ TROUBLESHOOTING
+---------------------------
+
+1. Test kết nối MQTT:
+   # Subscribe all topics
+   mosquitto_sub -h localhost -t "nha_toi/binh_nong_lanh/#" -u admin -P Admin123
+   
+   # Publish ON command
+   mosquitto_pub -h localhost -t "nha_toi/binh_nong_lanh/lenh" -m "ON" -u admin -P Admin123
+
+2. Kiểm tra Serial Monitor:
+   - "WiFi da ket noi!" → OK
+   - "Ket noi toi MQTT Server: xxx.xxx.xxx.xxx" → OK
+   - "Thoi gian hien tai: HH:MM:SS" → OK
+
+3. Lỗi thường gặp:
+
+   Lỗi: "Khong tim thay RTC!"
+   → Giải pháp: Hệ thống vẫn hoạt động với NTP, không cần RTC
+   
+   Lỗi: "Wifi connection failed"
+   → Kiểm tra SSID/password
+   → Đảm bảo WiFi là 2.4GHz
+   
+   Lỗi: "MQTT connection failed"
+   → Kiểm tra IP broker trong code
+   → Kiểm tra firewall port 1883
+   → Kiểm tra username/password
+   
+   Lỗi: ESP32 và máy tính khác mạng
+   → Dùng Mobile Hotspot từ máy tính
+   → Cả ESP32 và server đều kết nối cùng WiFi
+
+4. Debug với MQTT Explorer:
+   - Tải: https://mqtt-explorer.com/
+   - Connect: localhost:1883, user=admin, pass=Admin123
+   - Xem tất cả topics và messages realtime
+
+================================================================================
+VI. MÔ PHỎNG VỚI WOKWI
+================================================================================
+
+1. Wokwi Configuration (wokwi.toml):
+   - Firmware: .pio/build/esp32doit-devkit-v1/firmware.bin
+   - ELF: .pio/build/esp32doit-devkit-v1/firmware.elf
+
+2. Diagram (diagram.json):
+   - Author: Nguyen Thai Khoi
+   - Parts: ESP32 DevKit V4, Relay Module, RTC DS1307
+   - Connections: Đúng theo esp32_wiring_note.txt
+
+3. LƯU Ý QUAN TRỌNG:
+   - Wokwi Simulator KHÔNG thể kết nối Local MQTT Server
+   - Để test trên Wokwi: USE_LOCAL_SERVER = false (dùng HiveMQ Cloud)
+   - Để test với ESP32 thật: USE_LOCAL_SERVER = true
+
+4. Chạy trên Wokwi:
+   - Vào https://wokwi.com
+   - Upload diagram.json
+   - Upload firmware.bin
+   - Start simulation
+   - Chỉ test với Cloud Server (HiveMQ)
+
+================================================================================
+VII. SO SÁNH LOCAL vs CLOUD SERVER
+================================================================================
+
+┌──────────────────┬─────────────────────┬────────────────────────┐
+│  Tiêu chí        │  Local Server       │  HiveMQ Cloud          │
+├──────────────────┼─────────────────────┼────────────────────────┤
+│ Tốc độ           │ < 10ms              │ 50-200ms (Internet)    │
+│ Bảo mật          │ No TLS              │ TLS mặc định           │
+│ Ổn định          │ Phụ thuộc máy chủ   │ Uptime 99.9%           │
+│ Chi phí          │ Miễn phí            │ Free tier limit        │
+│ Truy cập từ xa   │ Cần VPN/Forward     │ Sẵn sàng               │
+│ Setup            │ Cần cài Node.js     │ Sẵn sàng               │
+│ Logging          │ Chi tiết            │ Giới hạn               │
+│ Customize        │ Toàn quyền          │ Không thể              │
+└──────────────────┴─────────────────────┴────────────────────────┘
+
+================================================================================
+VIII. TÍNH NĂNG NỔI BẬT
+================================================================================
+
+- Điều khiển từ xa qua Internet
+- Đặt lịch tự động (hẹn giờ bật/tắt)
+- Realtime status monitoring
+- Auto-reconnect khi mất kết nối
+- Fallback: RTC → NTP time
+- Web dashboard responsive
+- Hỗ trợ cả Local và Cloud MQTT
+- Logging chi tiết ở tất cả layers
+- Authentication MQTT
+- Wokwi simulation support
+- Mobile Hotspot compatibility
+- QoS support (0, 1, 2)
+
+================================================================================
+IX. TÍNH NĂNG CÓ THỂ MỞ RỘNG
+================================================================================
+
+1. Phần cứng:
+   - Thêm cảm biến nhiệt độ (DS18B20) để tự động điều khiển
+   - Thêm relay để điều khiển nhiều thiết bị
+   - Thêm màn hình LCD hiển thị trạng thái local
+   - Thêm nút nhấn vật lý để điều khiển on-site
+
+2. Phần mềm:
+   - Lưu log vào database (MongoDB/MySQL)
+   - Thêm user authentication cho web dashboard
+   - Push notification (email, Telegram, FCM)
+   - Biểu đồ thống kê sử dụng điện
+   - Voice control (Google Assistant, Alexa)
+   - Mobile app (React Native, Flutter)
+
+3. MQTT Server:
+   - Thêm TLS/SSL encryption
+   - Access Control Lists (ACL)
+   - Rate limiting
+   - Web dashboard cho monitoring
+   - Data persistence (Redis, MongoDB)
+
+4. Bảo mật:
+   - OTA (Over-The-Air) firmware update
+   - HTTPS cho web dashboard
+   - JWT authentication
+   - Role-based access control
+
+================================================================================
+X. TÀI LIỆU THAM KHẢO
+================================================================================
+
+1. Hardware:
+   - ESP32 Datasheet: https://www.espressif.com/en/products/socs/esp32
+   - RTC DS1307 Datasheet: https://datasheets.maximintegrated.com/en/ds/DS1307.pdf
+   - Relay Module: Generic 5V 1-Channel
+
+2. Libraries:
+   - PubSubClient: https://github.com/knolleary/pubsubclient
+   - RTClib: https://github.com/adafruit/RTClib
+   - WiFi ESP32: https://docs.espressif.com/projects/arduino-esp32
+
+3. MQTT:
+   - MQTT Protocol: https://mqtt.org/
+   - Aedes Broker: https://github.com/moscajs/aedes
+   - HiveMQ Cloud: https://www.hivemq.com/mqtt-cloud-broker/
+
+4. Tools:
+   - PlatformIO: https://platformio.org/
+   - Wokwi Simulator: https://wokwi.com/
+   - MQTT Explorer: https://mqtt-explorer.com/
+   - Mosquitto: https://mosquitto.org/
+
+================================================================================
+XI. THÔNG TIN DỰ ÁN
+================================================================================
+
+Phiên bản: 1.0.0
+Cập nhật lần cuối: 09/01/2026
+License: Open Source
+
+================================================================================
+XII. CHECKLIST HOÀN THÀNH DỰ ÁN
+================================================================================
+
+Phần cứng:
+- Đấu nối relay module
+- Đấu nối RTC DS1307
+- Test serial communication
+- Test relay on/off
+- Test RTC time sync
+
+Firmware ESP32:
+- WiFi connection
+- MQTT client implementation
+- NTP time sync
+- RTC integration
+- Schedule system
+- Auto-reconnect
+- Error handling
+- Logging
+
+MQTT Server:
+- Aedes broker setup
+- Authentication
+- WebSocket support
+- Logging system
+- Client monitoring
+
+Backend API:
+- HTTP endpoints
+- MQTT integration
+- CORS configuration
+- Error handling
+- Static file serving
+
+Web Dashboard:
+- UI design
+- Realtime status
+- Control buttons
+- Schedule input
+- Auto-refresh
+- Mobile responsive
+
+Documentation:
+- Wiring diagram
+- Test guide
+- README files
+- Code comments
+- Comprehensive report (bc.txt)
+
+Testing:
+- Hardware test
+- Software test
+- Integration test
+- Local server test
+- Cloud server test
+
+================================================================================
+KẾT LUẬN
+================================================================================
+
+Dự án ESP32_Demo là hệ thống IoT tích hợp các thành phần: hardware, firmware, 
+backend, frontend, và MQTT broker. Hệ thống có khả năng triển khai cho việc 
+điều khiển bình nóng lạnh hoặc các thiết bị điện trong smart home.
+
+Đặc điểm kỹ thuật:
+- Kiến trúc phân tầng rõ ràng
+- Code có tổ chức với comments
+- Hỗ trợ local và cloud deployment
+- Documentation đầy đủ
+- Error handling cơ bản
+- Khả năng mở rộng
+
+Hướng phát triển:
+- Tích hợp TLS cho local server
+- Thêm database lưu trữ lịch sử
+- Implement user authentication
+- Phát triển mobile app
+
+================================================================================
+HẾT BÁO CÁO
+================================================================================
